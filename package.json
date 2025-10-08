@@ -18,7 +18,7 @@
     "@expo/vector-icons": "^14.0.4",
     "@google/generative-ai": "^0.21.0",
     "@react-native-async-storage/async-storage": "^2.0.0",
-    "@react-native-community/datetimepicker": "^8.2.0",
+    "@react-native-community/datetimepicker": "^7.6.1",
     "@react-navigation/drawer": "^6.7.2",
     "@react-navigation/native": "^6.0.2",
     "@shopify/react-native-skia": "^1.5.3",
@@ -29,6 +29,7 @@
     "expo": "~51.0.28",
     "expo-asset": "^10.0.10",
     "expo-barcode-scanner": "~13.0.1",
+    "expo-blur": "~13.0.3",
     "expo-build-properties": "^0.12.5",
     "expo-camera": "^15.0.16",
     "expo-constants": "~16.0.2",
@@ -71,8 +72,7 @@
     "react-native-svg": "^15.8.0",
     "react-native-webview": "^13.12.3",
     "twilio": "^5.3.5",
-    "typescript": "~5.3.3",
-    "expo-blur": "~13.0.3"
+    "typescript": "~5.3.3"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
