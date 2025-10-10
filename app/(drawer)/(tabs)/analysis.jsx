@@ -97,9 +97,10 @@ const Analysis = () => {
       const transactionDate = new Date(transaction.date);
       const convertedAmount = convertAmount(
         transaction.amount,
-        transaction.currency,
+        transaction.currency || defaultCurrency,
         defaultCurrency
       );
+      
       for (let i = 0; i < periodData.length; i++) {
         const period = periodData[i];
         if (
@@ -114,12 +115,7 @@ const Analysis = () => {
             if (!categoryData[transaction.category]) {
               categoryData[transaction.category] = {
                 amount: 0,
-                budget:
-                  budgets.find(
-                    (b) =>
-                      b.title.toLowerCase() ===
-                      transaction.category.toLowerCase()
-                  )?.limit || 0,
+                budget: 0,
               };
             }
             categoryData[transaction.category].amount += convertedAmount;
@@ -131,17 +127,30 @@ const Analysis = () => {
       }
     });
 
-    // Calculate savings rate and budget utilization
+    // Match budgets with category data
+    if (budgets && Array.isArray(budgets)) {
+      budgets.forEach((budget) => {
+        if (budget.category && budget.limit > 0) {
+          // Initialize category if it doesn't exist yet
+          if (!categoryData[budget.category]) {
+            categoryData[budget.category] = {
+              amount: 0,
+              budget: budget.limit,
+            };
+          } else {
+            categoryData[budget.category].budget = budget.limit;
+          }
+          totalBudget += budget.limit;
+        }
+      });
+    }
+
+    // Calculate savings rate
     periodData.forEach((period) => {
       period.savings =
         period.income !== 0
           ? ((period.income - period.expenses) / period.income) * 100
           : 0;
-    });
-
-    // Process budgets (assumed to be in default currency)
-    budgets.forEach((budget) => {
-      totalBudget += budget.limit;
     });
 
     const budgetUtilization = totalBudget !== 0 ? (totalSpent / totalBudget) * 100 : 0;
@@ -155,7 +164,7 @@ const Analysis = () => {
     };
   }, [transactions, selectedTimeframe, budgets, defaultCurrency, convertAmount]);
 
-  // Prepare chart data
+  // Prepare chart data - only include categories with spending
   const spendingTrendData = {
     labels: processedData.periodData.map((d) => d.label),
     datasets: [
@@ -174,34 +183,39 @@ const Analysis = () => {
   };
 
   // Consistent color assignment for categories
-  const categoryNames = Object.keys(processedData.categoryData);
   const colors = COLORS.chartColors;
+
+  // Filter categories with actual spending for pie chart
+  const categoryNames = Object.keys(processedData.categoryData).filter(
+    category => processedData.categoryData[category].amount > 0
+  );
 
   const categoryChartData = categoryNames.map((category, index) => {
     const data = processedData.categoryData[category];
     return {
-      name:
-        category.length > 10 ? category.substring(0, 8) + "..." : category,
+      name: category,
+      fullName: category,
       amount: data.amount,
+      budget: data.budget,
       color: colors[index % colors.length],
       legendFontColor: COLORS.text.primary,
       legendFontSize: wp("3%"),
       percentageUsed:
-        data.budget !== 0 ? (data.amount / data.budget) * 100 : 0,
+        data.budget > 0 ? (data.amount / data.budget) * 100 : 0,
     };
   });
 
   // Category legend component
   const CategoryLegend = ({ data }) => (
     <View style={styles.legendContainer}>
-      {data.map((item) => (
-        <View key={item.name} style={styles.legendItem}>
+      {data.map((item, index) => (
+        <View key={`${item.name}-${index}`} style={styles.legendItem}>
           <View
             style={[styles.legendColor, { backgroundColor: item.color }]}
           />
-          <Text style={styles.legendText}>
-            {item.name} (
-            {((item.amount / processedData.totalSpent) * 100).toFixed(1)}%)
+          <Text style={styles.legendText} numberOfLines={1}>
+            {item.name.length > 12 ? item.name.substring(0, 10) + "..." : item.name}
+            {" "}({((item.amount / processedData.totalSpent) * 100).toFixed(1)}%)
           </Text>
         </View>
       ))}
@@ -233,6 +247,36 @@ const Analysis = () => {
     </View>
   );
 
+  // Get status color based on budget usage
+  const getStatusColor = (percentageUsed) => {
+    if (percentageUsed >= 100) return COLORS.danger || "#ff6b6b";
+    if (percentageUsed >= 90) return "#ffa500";
+    if (percentageUsed >= 75) return "#ffd43b";
+    return COLORS.secondary || "#51cf66";
+  };
+
+  // Prepare budget progress data - include all categories with budgets
+  const budgetProgressData = useMemo(() => {
+    if (!budgets || !Array.isArray(budgets)) return [];
+
+    return budgets
+      .filter(budget => budget.limit > 0) // Only show budgets that have been set
+      .map((budget, index) => {
+        const categoryData = processedData.categoryData[budget.category] || { amount: 0 };
+        const spent = categoryData.amount || 0;
+        const percentageUsed = budget.limit > 0 ? (spent / budget.limit) * 100 : 0;
+
+        return {
+          category: budget.category,
+          spent: spent,
+          limit: budget.limit,
+          percentageUsed: percentageUsed,
+          color: colors[index % colors.length],
+        };
+      })
+      .sort((a, b) => b.percentageUsed - a.percentageUsed); // Sort by usage percentage
+  }, [budgets, processedData.categoryData, colors]);
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar
@@ -251,118 +295,148 @@ const Analysis = () => {
             <Text style={styles.summaryLabel}>Total Spent</Text>
             <Text style={styles.summaryValue}>
               {currencySymbol}
-              {processedData.totalSpent.toFixed(2).toLocaleString()}
+              {processedData.totalSpent.toFixed(2)}
             </Text>
           </View>
           <View style={styles.summaryCard}>
             <Text style={styles.summaryLabel}>Budget Utilized</Text>
-            <Text style={styles.summaryValue}>
+            <Text style={[
+              styles.summaryValue,
+              { color: getStatusColor(processedData.budgetUtilization) }
+            ]}>
               {processedData.budgetUtilization.toFixed(1)}%
             </Text>
           </View>
         </View>
 
         {/* Spending Trend Chart */}
-        <View style={styles.chartContainer}>
-          <Text style={styles.chartTitle}>Income vs Expenses Trend</Text>
-          <LineChart
-            data={spendingTrendData}
-            width={screenWidth - wp("12%")}
-            height={220}
-            yAxisLabel={currencySymbol}
-            chartConfig={{
-              backgroundColor: COLORS.primary,
-              backgroundGradientFrom: COLORS.primary,
-              backgroundGradientTo: COLORS.primary,
-              decimalPlaces: 0,
-              color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-              labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-              style: {
-                borderRadius: 16,
-              },
-              propsForDots: {
-                r: "4",
-                strokeWidth: "2",
-                stroke: COLORS.primary,
-              },
-              propsForLabels: {
-                fontSize: wp("3%"),
-              },
-              spacing: wp("2%"),
-              formatYLabel: (value) =>
-                parseFloat(value)
-                  .toFixed(2)
-                  .toString()
-                  .replace(/\B(?=(\d{3})+(?!\d))/g, ","),
-            }}
-            bezier
-            style={[
-              styles.chart,
-              {
-                marginVertical: hp("1%"),
-                paddingRight: wp("4%"),
-              },
-            ]}
-            withInnerLines={true}
-            withOuterLines={true}
-            withVerticalLabels={true}
-            withHorizontalLabels={true}
-            fromZero={true}
-            segments={5}
-          />
-        </View>
-
-        {/* Category Analysis */}
-        <View style={styles.chartContainer}>
-          <Text style={styles.chartTitle}>Spending by Category</Text>
-          <View style={styles.pieChartContainer}>
-            <PieChart
-              data={categoryChartData}
-              width={screenWidth - wp("40%")}
-              height={200}
+        {processedData.periodData.some(p => p.expenses > 0 || p.income > 0) && (
+          <View style={styles.chartContainer}>
+            <Text style={styles.chartTitle}>Income vs Expenses Trend</Text>
+            <LineChart
+              data={spendingTrendData}
+              width={screenWidth - wp("12%")}
+              height={220}
+              yAxisLabel={currencySymbol}
               chartConfig={{
+                backgroundColor: COLORS.primary,
+                backgroundGradientFrom: COLORS.primary,
+                backgroundGradientTo: COLORS.primary,
+                decimalPlaces: 0,
                 color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
                 labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                style: {
+                  borderRadius: 16,
+                },
+                propsForDots: {
+                  r: "4",
+                  strokeWidth: "2",
+                  stroke: COLORS.primary,
+                },
+                propsForLabels: {
+                  fontSize: wp("3%"),
+                },
+                spacing: wp("2%"),
               }}
-              accessor="amount"
-              backgroundColor="transparent"
-              paddingLeft={0}
-              absolute
-              hasLegend={false}
-              center={[50, 0]}
+              bezier
+              style={[
+                styles.chart,
+                {
+                  marginVertical: hp("1%"),
+                  paddingRight: wp("4%"),
+                },
+              ]}
+              withInnerLines={true}
+              withOuterLines={true}
+              withVerticalLabels={true}
+              withHorizontalLabels={true}
+              fromZero={true}
+              segments={5}
             />
-            <CategoryLegend data={categoryChartData} />
           </View>
-        </View>
+        )}
+
+        {/* Category Analysis */}
+        {categoryChartData.length > 0 && (
+          <View style={styles.chartContainer}>
+            <Text style={styles.chartTitle}>Spending by Category</Text>
+            <View style={styles.pieChartContainer}>
+              <PieChart
+                data={categoryChartData}
+                width={screenWidth - wp("40%")}
+                height={200}
+                chartConfig={{
+                  color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                  labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                }}
+                accessor="amount"
+                backgroundColor="transparent"
+                paddingLeft={0}
+                absolute
+                hasLegend={false}
+                center={[50, 0]}
+              />
+              <CategoryLegend data={categoryChartData} />
+            </View>
+          </View>
+        )}
 
         {/* Category Budget Progress */}
-        <View style={styles.categoryProgressContainer}>
-          <Text style={styles.chartTitle}>Budget Progress</Text>
-          {categoryChartData.map((category) => (
-            <View key={category.name} style={styles.progressCard}>
-              <View style={styles.progressHeader}>
-                <Text style={styles.categoryName}>{category.name}</Text>
-                <Text style={styles.percentageUsed}>
-                  {category.percentageUsed.toFixed(1)}% used
-                </Text>
+        {budgetProgressData.length > 0 && (
+          <View style={styles.categoryProgressContainer}>
+            <Text style={styles.chartTitle}>Budget Progress</Text>
+            <Text style={styles.chartSubtitle}>
+              Track your spending against set budgets
+            </Text>
+            {budgetProgressData.map((item, index) => (
+              <View key={`${item.category}-${index}`} style={styles.progressCard}>
+                <View style={styles.progressHeader}>
+                  <Text style={styles.categoryName}>{item.category}</Text>
+                  <Text style={[
+                    styles.percentageUsed,
+                    { color: getStatusColor(item.percentageUsed) }
+                  ]}>
+                    {item.percentageUsed.toFixed(1)}% used
+                  </Text>
+                </View>
+                <View style={styles.progressAmounts}>
+                  <Text style={styles.progressAmountText}>
+                    {currencySymbol}{item.spent.toFixed(2)}
+                  </Text>
+                  <Text style={styles.progressLimitText}>
+                    of {currencySymbol}{item.limit.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.progressBar}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${Math.min(item.percentageUsed, 100)}%`,
+                        backgroundColor: getStatusColor(item.percentageUsed),
+                      },
+                    ]}
+                  />
+                </View>
+                {item.percentageUsed >= 100 && (
+                  <Text style={styles.overBudgetText}>
+                    ⚠️ Over budget by {currencySymbol}{(item.spent - item.limit).toFixed(2)}
+                  </Text>
+                )}
               </View>
-              <View style={styles.progressBar}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      width: `${Math.min(category.percentageUsed, 100)}%`,
-                      backgroundColor:
-                        category.percentageUsed > 100
-                          ? COLORS.danger
-                          : COLORS.secondary,
-                    },
-                  ]}
-                />
-              </View>
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
+        )}
+
+        {/* Empty State */}
+        {budgetProgressData.length === 0 && categoryChartData.length === 0 && (
+          <View style={styles.emptyStateContainer}>
+            <Text style={styles.emptyStateTitle}>No Data Available</Text>
+            <Text style={styles.emptyStateText}>
+              Start adding transactions and setting budgets to see your analysis
+            </Text>
+          </View>
+        )}
       </ScrollView>
 
       {/* AI Chat Button */}
@@ -476,10 +550,15 @@ const styles = StyleSheet.create({
     marginTop: hp("2%"),
   },
   chartTitle: {
-    fontSize: wp("4%"),
+    fontSize: wp("4.5%"),
     color: COLORS.text.primary,
     fontWeight: "bold",
-    marginBottom: hp("1%"),
+    marginBottom: hp("0.5%"),
+  },
+  chartSubtitle: {
+    fontSize: wp("3%"),
+    color: COLORS.text.secondary,
+    marginBottom: hp("2%"),
   },
   chart: {
     marginVertical: hp("1%"),
@@ -487,23 +566,44 @@ const styles = StyleSheet.create({
     paddingTop: hp("1%"),
   },
   categoryProgressContainer: {
-    marginBottom: hp("3%"),
+    marginBottom: hp("10%"),
+    backgroundColor: COLORS.lightbackground,
+    borderRadius: wp("4%"),
+    padding: wp("4%"),
   },
   progressCard: {
-    marginBottom: hp("2%"),
+    marginBottom: hp("2.5%"),
+    backgroundColor: COLORS.background,
+    borderRadius: wp("3%"),
+    padding: wp("3%"),
   },
   progressHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: hp("1%"),
+    marginBottom: hp("0.5%"),
   },
   categoryName: {
+    fontSize: wp("4%"),
+    color: COLORS.text.primary,
+    fontWeight: "600",
+  },
+  percentageUsed: {
+    fontSize: wp("3.5%"),
+    fontWeight: "600",
+  },
+  progressAmounts: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: hp("1%"),
+  },
+  progressAmountText: {
     fontSize: wp("3.5%"),
     color: COLORS.text.primary,
     fontWeight: "500",
   },
-  percentageUsed: {
+  progressLimitText: {
     fontSize: wp("3%"),
     color: COLORS.text.secondary,
   },
@@ -516,6 +616,12 @@ const styles = StyleSheet.create({
   progressFill: {
     height: "100%",
     borderRadius: wp("2%"),
+  },
+  overBudgetText: {
+    fontSize: wp("3%"),
+    color: COLORS.danger || "#ff6b6b",
+    marginTop: hp("0.5%"),
+    fontWeight: "500",
   },
   chatButton: {
     position: "absolute",
@@ -565,6 +671,23 @@ const styles = StyleSheet.create({
     color: COLORS.text.primary,
     fontSize: wp("3%"),
     flex: 1,
+  },
+  emptyStateContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: hp("10%"),
+  },
+  emptyStateTitle: {
+    fontSize: wp("5%"),
+    fontWeight: "bold",
+    color: COLORS.text.primary,
+    marginBottom: hp("1%"),
+  },
+  emptyStateText: {
+    fontSize: wp("3.5%"),
+    color: COLORS.text.secondary,
+    textAlign: "center",
+    paddingHorizontal: wp("10%"),
   },
 });
 
