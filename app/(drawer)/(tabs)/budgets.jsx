@@ -12,6 +12,7 @@ import {
   Platform,
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { COLORS } from "../../../constants/theme";
 import {
   widthPercentageToDP as wp,
@@ -25,14 +26,17 @@ import {
   BudgetNotificationListener,
 } from "../../../components/Budgetnotification";
 
+const BUDGETS_STORAGE_KEY = "APP_BUDGETS";
+
 const BudgetsScreen = () => {
-  const { state, updateBudget, fetchSpentByCategory, convertAmount } = useGlobalContext();
+  const { state, fetchSpentByCategory, convertAmount } = useGlobalContext();
   const { t, i18n } = useTranslation();
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState(null);
   const [newLimit, setNewLimit] = useState("");
   const [budgets, setBudgets] = useState([]);
   const [spentByCategory, setSpentByCategory] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
 
   const {
     checkBudgetThresholds,
@@ -43,95 +47,6 @@ const BudgetsScreen = () => {
   // Get the default currency and symbol
   const defaultCurrency = state.defaultCurrency || 'USD';
   const currencySymbol = state.currencies[defaultCurrency]?.symbol || defaultCurrency;
-
-  // Initialize budgets for all categories
-  useEffect(() => {
-    const initializeBudgets = async () => {
-      try {
-        const allCategories = [
-          ...state.categories.EXPENSE,
-          ...state.categories.TRANSFER,
-        ];
-
-        let currentBudgets = state.budgets || [];
-
-        // Create default budgets for categories that don't have one
-        const newBudgets = allCategories.map((category) => {
-          const existingBudget = currentBudgets.find(
-            (b) => b.category === category
-          );
-          if (existingBudget) {
-            return existingBudget;
-          }
-          return {
-            id: Date.now().toString() + category,
-            category: category,
-            title: category,
-            limit: 0,
-            icon: getCategoryIcon(category),
-            type: state.categories.EXPENSE.includes(category)
-              ? "EXPENSE"
-              : "TRANSFER",
-          };
-        });
-
-        setBudgets(newBudgets);
-        if (!state.budgets || state.budgets.length === 0) {
-          updateBudget(newBudgets);
-        }
-      } catch (error) {
-        console.error("Error initializing budgets:", error);
-      }
-    };
-
-    initializeBudgets();
-  }, [state.categories]);
-
-  useEffect(() => {
-    if (state.language && i18n.language !== state.language) {
-      i18n.changeLanguage(state.language);
-    }
-  }, [state.language]);
-
-  useEffect(() => {
-    if (state.budgets) {
-      setBudgets(state.budgets);
-    }
-  }, [state.budgets]);
-
-  useEffect(() => {
-    checkBudgetThresholds(budgets, spentByCategory);
-  }, [budgets, spentByCategory, checkBudgetThresholds]);
-
-  useEffect(() => {
-    const requestPermissionsAndCheckBudgets = async () => {
-      const permissionsGranted = await requestNotificationPermissions();
-      console.log("Notification permissions granted:", permissionsGranted);
-      if (permissionsGranted) {
-        checkBudgetThresholds(budgets);
-      }
-    };
-
-    requestPermissionsAndCheckBudgets();
-  }, [budgets, checkBudgetThresholds]);
-
-  useEffect(() => {
-    const fetchSpentData = async () => {
-      try {
-        const spentData = await fetchSpentByCategory();
-        const spentMap = spentData.reduce((acc, { category, totalSpent, currency }) => {
-          const convertedSpent = convertAmount(totalSpent, currency, defaultCurrency);
-          acc[category] = (acc[category] || 0) + convertedSpent;
-          return acc;
-        }, {});
-        setSpentByCategory(spentMap);
-      } catch (error) {
-        console.error("Error fetching spent by category:", error);
-      }
-    };
-
-    fetchSpentData();
-  }, [fetchSpentByCategory, convertAmount, defaultCurrency]);
 
   const getCategoryIcon = (category) => {
     const iconMap = {
@@ -147,30 +62,140 @@ const BudgetsScreen = () => {
       "Debt Payment": "credit-card",
       Other: "dot-circle",
     };
-
     return iconMap[category] || "dot-circle";
   };
 
-  // Total budget and spent calculations with proper currency handling
-  const totalBudget = budgets.reduce(
-    (total, budget) => total + budget.limit,
-    0
-  );
+  // Load saved budgets from AsyncStorage
+  const loadSavedBudgets = async () => {
+    try {
+      const savedBudgets = await AsyncStorage.getItem(BUDGETS_STORAGE_KEY);
+      return savedBudgets ? JSON.parse(savedBudgets) : null;
+    } catch (error) {
+      console.error("Error loading saved budgets:", error);
+      return null;
+    }
+  };
 
-  const totalSpent = Object.values(spentByCategory).reduce(
-    (total, spent) => total + spent,
-    0
-  );
+  // Save budgets to AsyncStorage
+  const saveBudgetsToStorage = async (budgetsToSave) => {
+    try {
+      await AsyncStorage.setItem(BUDGETS_STORAGE_KEY, JSON.stringify(budgetsToSave));
+    } catch (error) {
+      console.error("Error saving budgets:", error);
+    }
+  };
 
+  // Initialize budgets for all categories
+  useEffect(() => {
+    const initializeBudgets = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Load saved budgets first
+        const savedBudgets = await loadSavedBudgets();
+        
+        const allCategories = [
+          ...state.categories.EXPENSE,
+          ...state.categories.TRANSFER,
+        ];
+
+        // Create budgets array, preserving saved limits
+        const initializedBudgets = allCategories.map((category) => {
+          // Check if budget exists in saved budgets
+          const savedBudget = savedBudgets?.find(b => b.category === category);
+          
+          if (savedBudget) {
+            // Use saved budget with its limit
+            return {
+              ...savedBudget,
+              icon: getCategoryIcon(category),
+              type: state.categories.EXPENSE.includes(category) ? "EXPENSE" : "TRANSFER",
+            };
+          }
+          
+          // Create new budget with 0 limit
+          return {
+            id: Date.now().toString() + category,
+            category: category,
+            title: category,
+            limit: 0,
+            icon: getCategoryIcon(category),
+            type: state.categories.EXPENSE.includes(category) ? "EXPENSE" : "TRANSFER",
+          };
+        });
+
+        setBudgets(initializedBudgets);
+        
+        // Save to storage if it's the first time
+        if (!savedBudgets || savedBudgets.length === 0) {
+          await saveBudgetsToStorage(initializedBudgets);
+        }
+        
+        setIsLoading(false);
+      } catch (error) {
+        console.error("Error initializing budgets:", error);
+        setIsLoading(false);
+      }
+    };
+
+    if (state.categories) {
+      initializeBudgets();
+    }
+  }, [state.categories]);
+
+  useEffect(() => {
+    if (state.language && i18n.language !== state.language) {
+      i18n.changeLanguage(state.language);
+    }
+  }, [state.language]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      checkBudgetThresholds(budgets, spentByCategory);
+    }
+  }, [budgets, spentByCategory, checkBudgetThresholds, isLoading]);
+
+  useEffect(() => {
+    const requestPermissionsAndCheckBudgets = async () => {
+      const permissionsGranted = await requestNotificationPermissions();
+      console.log("Notification permissions granted:", permissionsGranted);
+      if (permissionsGranted && !isLoading) {
+        checkBudgetThresholds(budgets, spentByCategory);
+      }
+    };
+
+    if (!isLoading) {
+      requestPermissionsAndCheckBudgets();
+    }
+  }, [budgets, checkBudgetThresholds, isLoading]);
+
+  useEffect(() => {
+    const fetchSpentData = async () => {
+      try {
+        const spentData = await fetchSpentByCategory();
+        const spentMap = spentData.reduce((acc, { category, totalSpent }) => {
+          const convertedSpent = convertAmount(totalSpent, state.defaultCurrency, defaultCurrency);
+          acc[category] = (acc[category] || 0) + convertedSpent;
+          return acc;
+        }, {});
+        setSpentByCategory(spentMap);
+      } catch (error) {
+        console.error("Error fetching spent by category:", error);
+      }
+    };
+
+    fetchSpentData();
+  }, [fetchSpentByCategory, convertAmount, defaultCurrency]);
+
+  // Total budget and spent calculations
+  const totalBudget = budgets.reduce((total, budget) => total + budget.limit, 0);
+  const totalSpent = Object.values(spentByCategory).reduce((total, spent) => total + spent, 0);
   const totalRemaining = totalBudget - totalSpent;
-  const spentPercentage =
-    totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
+  const spentPercentage = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
   const handleNotificationReceived = (notification) => {
     const { percentage, category, title } = notification.request.content.data;
-    console.log(
-      `Received notification: ${title} in category ${category} at ${percentage}%`
-    );
+    console.log(`Received notification: ${title} in category ${category} at ${percentage}%`);
   };
 
   const openEditModal = (budget) => {
@@ -179,19 +204,24 @@ const BudgetsScreen = () => {
     setModalVisible(true);
   };
 
-  const saveBudgetChange = () => {
+  const saveBudgetChange = async () => {
     if (selectedBudget && newLimit) {
       const updatedBudget = {
         ...selectedBudget,
-        limit: parseFloat(newLimit),
+        limit: parseFloat(newLimit) || 0,
       };
 
       const updatedBudgets = budgets.map((budget) =>
         budget.id === selectedBudget.id ? updatedBudget : budget
       );
+      
       setBudgets(updatedBudgets);
-      updateBudget(updatedBudgets);
-      sendBudgetNotification(updatedBudget);
+      
+      // Save to AsyncStorage
+      await saveBudgetsToStorage(updatedBudgets);
+      
+      // Send notification if needed
+      sendBudgetNotification(updatedBudget, spentByCategory);
 
       setModalVisible(false);
       setSelectedBudget(null);
@@ -205,6 +235,7 @@ const BudgetsScreen = () => {
   };
 
   const getBudgetStatus = (spent, limit) => {
+    if (limit === 0) return { color: "#51cf66", message: "Not Set" };
     const percentage = (spent / limit) * 100;
     if (percentage >= 90) return { color: "#ff6b6b", message: "Critical" };
     if (percentage >= 75) return { color: "#ffd43b", message: "Warning" };
@@ -246,9 +277,7 @@ const BudgetsScreen = () => {
           </View>
 
           <View style={styles.budgetDetails}>
-            <View
-              style={{ flexDirection: "row", justifyContent: "space-between" }}
-            >
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
               <Text style={styles.budgetType}>{budget.title}</Text>
               <TouchableOpacity
                 style={styles.editButton}
@@ -259,14 +288,14 @@ const BudgetsScreen = () => {
                   size={wp("5%")}
                   color={COLORS.text.primary}
                 />
-                <Text style={styles.editButtonText}>Edit </Text>
+                <Text style={styles.editButtonText}>Edit</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.budgetProgressInfo}>
               <Text style={styles.budgetProgress}>
                 {currencySymbol}
-                {spent.toFixed(2).toLocaleString()} / {currencySymbol}
-                {budget.limit.toLocaleString()}
+                {spent.toFixed(2)} / {currencySymbol}
+                {budget.limit > 0 ? budget.limit.toFixed(2) : '0'}
               </Text>
               <Text style={[styles.budgetStatus, { color: status.color }]}>
                 {status.message}
@@ -281,6 +310,17 @@ const BudgetsScreen = () => {
       </TouchableOpacity>
     );
   };
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Header seachIconShown={false} />
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading budgets...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -298,7 +338,7 @@ const BudgetsScreen = () => {
             </View>
             <Text style={styles.totalBalanceAmount}>
               {currencySymbol}
-              {totalBudget.toLocaleString()}
+              {totalBudget.toFixed(2)}
             </Text>
           </View>
 
@@ -314,7 +354,7 @@ const BudgetsScreen = () => {
               <Text style={styles.summaryLabel}>{t("spent")}</Text>
               <Text style={[styles.summaryAmount, { color: "#ff6b6b" }]}>
                 {currencySymbol}
-                {totalSpent.toFixed(2).toLocaleString()}
+                {totalSpent.toFixed(2)}
               </Text>
             </View>
             <View style={styles.divider} />
@@ -322,7 +362,7 @@ const BudgetsScreen = () => {
               <Text style={styles.summaryLabel}>{t("remaining")}</Text>
               <Text style={[styles.summaryAmount, { color: "#51cf66" }]}>
                 {currencySymbol}
-                {totalRemaining.toFixed(2).toLocaleString()}
+                {totalRemaining.toFixed(2)}
               </Text>
             </View>
           </View>
@@ -332,14 +372,8 @@ const BudgetsScreen = () => {
         <View style={styles.budgetsList}>
           {state.categories && state.categories.EXPENSE ? (
             state.categories.EXPENSE.map((category) => {
-              const budget = budgets.find((b) => b.category === category) || {
-                id: Date.now().toString() + category,
-                category: category,
-                title: category,
-                limit: 0,
-                icon: getCategoryIcon(category),
-              };
-              return renderBudgetCard(budget);
+              const budget = budgets.find((b) => b.category === category);
+              return budget ? renderBudgetCard(budget) : null;
             })
           ) : (
             <Text>{t("No expense categories available")}</Text>
@@ -350,21 +384,14 @@ const BudgetsScreen = () => {
         <View style={styles.budgetsList}>
           {state.categories && state.categories.TRANSFER ? (
             state.categories.TRANSFER.map((category) => {
-              const budget = budgets.find((b) => b.category === category) || {
-                id: Date.now().toString() + category,
-                category: category,
-                title: category,
-                limit: 0,
-                icon: getCategoryIcon(category),
-              };
-              return renderBudgetCard(budget);
+              const budget = budgets.find((b) => b.category === category);
+              return budget ? renderBudgetCard(budget) : null;
             })
           ) : (
             <Text>{t("No transfer categories available")}</Text>
           )}
         </View>
         
-        {/* Modal for editing budget limit */}
         <Modal
           visible={modalVisible}
           transparent={true}
@@ -424,6 +451,7 @@ const BudgetsScreen = () => {
                         keyboardType="numeric"
                         value={newLimit}
                         onChangeText={handleLimitChange}
+                        placeholder="0.00"
                         placeholderTextColor={COLORS.text.secondary}
                         selectionColor={COLORS.primary}
                       />
@@ -434,9 +462,7 @@ const BudgetsScreen = () => {
                     <Text style={styles.modalInfoText}>Current Spent</Text>
                     <Text style={styles.modalInfoValue}>
                       {currencySymbol}
-                      {(
-                        spentByCategory[selectedBudget.category] || 0
-                      ).toFixed(2).toLocaleString()}
+                      {(spentByCategory[selectedBudget.category] || 0).toFixed(2)}
                     </Text>
                   </View>
 
@@ -466,7 +492,6 @@ const BudgetsScreen = () => {
   );
 };
 
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -475,15 +500,14 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
-  totalBalance: {
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
-    padding: wp("4%"),
-    backgroundColor: COLORS.background,
   },
-  totalBalanceLabel: {
+  loadingText: {
     fontSize: wp("4%"),
-    color: COLORS.text.primary,
-    marginBottom: hp("1%"),
+    color: COLORS.text.secondary,
   },
   totalBalanceAmount: {
     fontSize: wp("7%"),
@@ -491,35 +515,31 @@ const styles = StyleSheet.create({
     color: COLORS.text.primary,
     marginBottom: hp("2%"),
   },
-  overallProgress: {
-    width: "100%",
-    alignItems: "center",
-    paddingHorizontal: wp("4%"),
-  },
-  overallProgressText: {
-    fontSize: wp("3.5%"),
-    color: COLORS.text.secondary,
-    marginTop: hp("1%"),
-  },
   summary: {
     flexDirection: "row",
     justifyContent: "space-around",
-    padding: wp("4%"),
-    backgroundColor: COLORS.background,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.lightbackground,
+    alignItems: "center",
+    paddingTop: hp("2%"),
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.1)",
   },
   summaryItem: {
+    flex: 1,
     alignItems: "center",
   },
   summaryLabel: {
-    fontSize: wp("3%"),
+    fontSize: wp("3.5%"),
     color: COLORS.text.secondary,
     marginBottom: hp("0.5%"),
   },
   summaryAmount: {
-    fontSize: wp("4%"),
-    fontWeight: "500",
+    fontSize: wp("4.5%"),
+    fontWeight: "600",
+  },
+  divider: {
+    width: 1,
+    height: hp("4%"),
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
   },
   sectionTitle: {
     fontSize: wp("5%"),
@@ -590,20 +610,16 @@ const styles = StyleSheet.create({
     color: COLORS.text.secondary,
     marginTop: hp("0.5%"),
   },
-  addBudgetButton: {
+  editButton: {
+    marginTop: hp("1%"),
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    padding: wp("4%"),
-    backgroundColor: COLORS.lightbackground,
-    borderRadius: wp("3%"),
-    margin: wp("4%"),
+    padding: wp("1%"),
+    paddingBottom: hp("1%"),
   },
-  addBudgetText: {
+  editButtonText: {
+    marginLeft: wp("1%"),
     color: COLORS.text.primary,
-    fontSize: wp("4%"),
-    fontWeight: "500",
-    marginLeft: wp("2%"),
   },
   modalContainer: {
     flex: 1,
@@ -617,54 +633,16 @@ const styles = StyleSheet.create({
     padding: wp("5%"),
     paddingBottom: Platform.OS === "ios" ? hp("8%") : hp("4%"),
   },
-  modalTitle: {
-    fontSize: wp("5%"),
-    fontWeight: "bold",
-    marginBottom: hp("2%"),
-    color: COLORS.text.primary,
-  },
-  modalLabel: {
-    fontSize: wp("4%"),
-    marginBottom: hp("1%"),
-    color: COLORS.text.primary,
-  },
-  modalInput: {
-    flex: 1,
-    fontSize: wp("5%"),
-    color: COLORS.text.primary,
-    padding: 0,
-  },
-  modalButtons: {
-    flexDirection: "row",
-    gap: wp("8%"),
-    justifyContent: "center",
-    marginTop: hp("2%"),
-  },
-  modalButton: {
-    padding: wp("2%"),
-    backgroundColor: COLORS.primary,
-    borderRadius: 5,
-  },
-  modalButtonText: {
-    color: COLORS.text.secondary,
-    fontSize: wp("4%"),
-  },
-  editButton: {
-    marginTop: hp("1%"),
-    flexDirection: "row",
-    alignItems: "center",
-    padding: wp("1%"),
-    paddingBottom: hp("1%"),
-  },
-  editButtonText: {
-    marginLeft: wp("1%"),
-    color: COLORS.text.primary,
-  },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: hp("3%"),
+  },
+  modalTitle: {
+    fontSize: wp("5%"),
+    fontWeight: "bold",
+    color: COLORS.text.primary,
   },
   modalCloseButton: {
     padding: wp("2%"),
@@ -710,6 +688,12 @@ const styles = StyleSheet.create({
     color: COLORS.text.primary,
     marginRight: wp("2%"),
   },
+  modalInput: {
+    flex: 1,
+    fontSize: wp("5%"),
+    color: COLORS.text.primary,
+    padding: 0,
+  },
   modalCurrentInfo: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -728,17 +712,25 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: COLORS.text.primary,
   },
+  modalButtons: {
+    flexDirection: "row",
+    gap: wp("8%"),
+    justifyContent: "center",
+    marginTop: hp("2%"),
+  },
+  modalButton: {
+    padding: wp("2%"),
+    borderRadius: wp("6%"),
+  },
   modalCancelButton: {
     backgroundColor: COLORS.lightbackground,
     paddingVertical: hp("2%"),
     paddingHorizontal: wp("5%"),
-    borderRadius: wp("6%"),
   },
   modalSaveButton: {
     backgroundColor: COLORS.primary,
     paddingVertical: hp("2%"),
     paddingHorizontal: wp("5%"),
-    borderRadius: wp("6%"),
   },
   modalCancelButtonText: {
     color: COLORS.text.primary,
@@ -778,9 +770,6 @@ const styles = StyleSheet.create({
     color: COLORS.text.secondary,
     fontWeight: "500",
   },
-  infoButton: {
-    padding: wp("1%"),
-  },
   overviewProgress: {
     marginBottom: hp("2%"),
   },
@@ -789,67 +778,6 @@ const styles = StyleSheet.create({
     color: COLORS.text.secondary,
     marginTop: hp("1%"),
     textAlign: "center",
-  },
-  summary: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    paddingTop: hp("2%"),
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255, 255, 255, 0.1)",
-  },
-  summaryItem: {
-    flex: 1,
-    alignItems: "center",
-  },
-  divider: {
-    width: 1,
-    height: hp("4%"),
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-  },
-  summaryLabel: {
-    fontSize: wp("3.5%"),
-    color: COLORS.text.secondary,
-    marginBottom: hp("0.5%"),
-  },
-  summaryAmount: {
-    fontSize: wp("4.5%"),
-    fontWeight: "600",
-  },
-  // New Add Budget Button Styles
-  addBudgetButton: {
-    margin: wp("4%"),
-    marginTop: 0,
-    backgroundColor: COLORS.lightbackground,
-    borderRadius: wp("4%"),
-    overflow: "hidden",
-  },
-  addButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: wp("4%"),
-  },
-  addIconContainer: {
-    width: wp("12%"),
-    height: wp("12%"),
-    borderRadius: wp("6%"),
-    backgroundColor: "rgba(66, 153, 225, 0.1)", // Using primary color with opacity
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: wp("3%"),
-  },
-  addButtonTextContainer: {
-    flex: 1,
-  },
-  addBudgetTitle: {
-    fontSize: wp("4%"),
-    fontWeight: "600",
-    color: COLORS.text.primary,
-    marginBottom: hp("0.5%"),
-  },
-  addBudgetSubtext: {
-    fontSize: wp("3.5%"),
-    color: COLORS.text.secondary,
   },
 });
 
