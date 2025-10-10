@@ -2,7 +2,7 @@
 
 import ReceiptParser from "../utils/ReceiptParser";
 import LottieView from "lottie-react-native";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -19,13 +19,14 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../constants/theme";
 import * as ImagePicker from "expo-image-picker";
-import { formatCurrency, convertAmount } from "../utils/currencyService";
+import { formatCurrency } from "../utils/currencyService";
 import {
   widthPercentageToDP as wp,
   heightPercentageToDP as hp,
 } from "react-native-responsive-screen";
 import ExpenseCalculator from "./ExpenseCalculator";
 import TransactionRecord from "./TransactionRecord";
+import { FilterModal } from "./FilterModal";
 import { useNavigation } from "@react-navigation/native";
 import { useGlobalContext } from "./globalProvider";
 import {
@@ -47,6 +48,8 @@ const MoneyTracker = () => {
 
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [filters, setFilters] = useState({ type: "ALL", categories: [] });
 
   useEffect(() => {
     loadExpensesFromDB();
@@ -60,63 +63,100 @@ const MoneyTracker = () => {
     }
   }, [state.language]);
 
-  // Filter transactions for current month and search term
-  const currentMonthTransactions = state.transactions.filter((transaction) => {
-    const transactionDate = parseISO(transaction.date);
-    const monthStart = startOfMonth(parseISO(state.currentMonth));
-    const monthEnd = endOfMonth(parseISO(state.currentMonth));
+  // Memoize all categories
+  const allCategories = useMemo(() => {
+    return [...state.categories.EXPENSE, ...state.categories.INCOME];
+  }, [state.categories]);
 
-    const isInCurrentMonth = isWithinInterval(transactionDate, {
-      start: monthStart,
-      end: monthEnd,
+  // Filter transactions for current month, search term, and filters
+  const currentMonthTransactions = useMemo(() => {
+    return state.transactions.filter((transaction) => {
+      const transactionDate = parseISO(transaction.date);
+      const monthStart = startOfMonth(parseISO(state.currentMonth));
+      const monthEnd = endOfMonth(parseISO(state.currentMonth));
+
+      const isInCurrentMonth = isWithinInterval(transactionDate, {
+        start: monthStart,
+        end: monthEnd,
+      });
+
+      // Search filter
+      let matchesSearch = true;
+      if (searchTerm && searchTerm.trim() !== "") {
+        const searchLower = searchTerm.toLowerCase();
+        const noteMatch =
+          transaction.note &&
+          transaction.note.toLowerCase().includes(searchLower);
+        const categoryMatch =
+          transaction.category &&
+          transaction.category.toLowerCase().includes(searchLower);
+        const accountMatch =
+          transaction.account &&
+          transaction.account.toLowerCase().includes(searchLower);
+        matchesSearch = noteMatch || categoryMatch || accountMatch;
+      }
+
+      // Type filter
+      let matchesType = true;
+      if (filters.type !== "ALL") {
+        matchesType = transaction.type === filters.type;
+      }
+
+      // Category filter
+      let matchesCategory = true;
+      if (filters.categories.length > 0) {
+        matchesCategory = filters.categories.includes(transaction.category);
+      }
+
+      // Exclude 'TRANSFER' transactions
+      return (
+        isInCurrentMonth &&
+        matchesSearch &&
+        matchesType &&
+        matchesCategory &&
+        transaction.type !== "TRANSFER"
+      );
     });
-
-    let matchesSearch = true;
-    if (searchTerm && searchTerm.trim() !== "") {
-      const searchLower = searchTerm.toLowerCase();
-      const noteMatch =
-        transaction.note &&
-        transaction.note.toLowerCase().includes(searchLower);
-      const categoryMatch =
-        transaction.category &&
-        transaction.category.toLowerCase().includes(searchLower);
-      const accountMatch =
-        transaction.account &&
-        transaction.account.toLowerCase().includes(searchLower);
-      matchesSearch = noteMatch || categoryMatch || accountMatch;
-    }
-
-    // Exclude 'TRANSFER' transactions
-    return (
-      isInCurrentMonth && matchesSearch && transaction.type !== "TRANSFER"
-    );
-  });
+  }, [
+    state.transactions,
+    state.currentMonth,
+    searchTerm,
+    filters.type,
+    filters.categories,
+  ]);
 
   // Calculate summary for current month with currency conversion
-  const currentMonthSummary = currentMonthTransactions.reduce(
-    (summary, transaction) => {
-      const amount = parseFloat(transaction.amount);
-      const convertedAmount = convertAmount(
-        amount,
-        transaction.currency || "USD",
-        state.defaultCurrency
-      );
+  const currentMonthSummary = useMemo(() => {
+    const summary = currentMonthTransactions.reduce(
+      (acc, transaction) => {
+        const amount = parseFloat(transaction.amount);
+        const convertedAmount = convertAmount(
+          amount,
+          transaction.currency || "USD",
+          state.defaultCurrency
+        );
 
-      // Skip if convertedAmount is NaN
-      if (isNaN(convertedAmount)) return summary;
+        if (isNaN(convertedAmount)) return acc;
 
-      if (transaction.type === "EXPENSE") {
-        summary.expense += convertedAmount;
-      } else if (transaction.type === "INCOME") {
-        summary.income += convertedAmount;
-      }
-      return summary;
-    },
-    { expense: 0, income: 0 }
-  );
+        if (transaction.type === "EXPENSE") {
+          acc.expense += convertedAmount;
+        } else if (transaction.type === "INCOME") {
+          acc.income += convertedAmount;
+        }
+        return acc;
+      },
+      { expense: 0, income: 0 }
+    );
 
-  currentMonthSummary.total =
-    currentMonthSummary.income - currentMonthSummary.expense;
+    return {
+      ...summary,
+      total: summary.income - summary.expense,
+    };
+  }, [currentMonthTransactions, convertAmount, state.defaultCurrency]);
+
+  const handleApplyFilters = useCallback((newFilters) => {
+    setFilters(newFilters);
+  }, []);
 
   const showImageSourceOptions = () => {
     Alert.alert(
@@ -216,7 +256,7 @@ const MoneyTracker = () => {
                 category: details.category,
                 account: details.account,
                 note: details.notes || "",
-                currency: state.defaultCurrency, // Ensure currency is set correctly
+                currency: state.defaultCurrency,
               };
 
               try {
@@ -248,14 +288,13 @@ const MoneyTracker = () => {
     }
   };
 
-  const handleEdit = (transaction) => {
+  const handleEdit = useCallback((transaction) => {
     setEditingTransaction(transaction);
     setShowCalculator(true);
-  };
+  }, []);
 
   const handleSaveTransaction = async (transactionData) => {
     try {
-      // Add currency to transaction data if not present
       const transactionWithCurrency = {
         ...transactionData,
         currency: transactionData.currency || state.defaultCurrency,
@@ -290,6 +329,17 @@ const MoneyTracker = () => {
     dispatch({ type: "NEXT_MONTH" });
   };
 
+  const renderTransaction = useCallback(
+    (transaction) => (
+      <TransactionRecord
+        key={transaction.id}
+        transaction={transaction}
+        onEdit={handleEdit}
+      />
+    ),
+    [handleEdit]
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar
@@ -316,30 +366,49 @@ const MoneyTracker = () => {
           />
         </View>
 
-        {/* Right side: Search icon or placeholder for consistent spacing */}
-        {showSearchBar ? (
+        {/* Right side: Search and Filter icons */}
+        <View style={styles.rightButtons}>
+          {showSearchBar ? (
+            <TouchableOpacity
+              onPress={() => {
+                setShowSearchBar(false);
+                setSearchTerm("");
+              }}
+              style={styles.iconButton}
+            >
+              <Ionicons
+                name="close"
+                size={wp("6%")}
+                color={COLORS.text.primary}
+              />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={() => setShowSearchBar(true)}
+              style={styles.iconButton}
+            >
+              <Ionicons
+                name="search"
+                size={wp("6%")}
+                color={COLORS.text.primary}
+              />
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
-            onPress={() => setShowSearchBar(false)}
-            style={styles.searchButton}
+            onPress={() => setFilterModalVisible(true)}
+            style={styles.iconButton}
           >
             <Ionicons
-              name="close"
+              name="funnel-outline"
               size={wp("6%")}
               color={COLORS.text.primary}
             />
+            {(filters.type !== "ALL" || filters.categories.length > 0) && (
+              <View style={styles.filterBadge} />
+            )}
           </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={() => setShowSearchBar(true)}
-            style={styles.searchButton}
-          >
-            <Ionicons
-              name="search"
-              size={wp("6%")}
-              color={COLORS.text.primary}
-            />
-          </TouchableOpacity>
-        )}
+        </View>
       </View>
 
       {/* Search Input */}
@@ -348,9 +417,10 @@ const MoneyTracker = () => {
           <TextInput
             style={styles.searchInput}
             placeholder="Search transactions..."
-            placeholderTextColor="white"
+            placeholderTextColor={COLORS.text.secondary}
             value={searchTerm}
             onChangeText={setSearchTerm}
+            autoFocus
           />
         </View>
       )}
@@ -376,7 +446,7 @@ const MoneyTracker = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Summary Section with formatted currency */}
+      {/* Summary Section */}
       <View style={styles.summary}>
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>{t("Expenses")}</Text>
@@ -390,10 +460,7 @@ const MoneyTracker = () => {
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>{t("Income")}</Text>
           <Text style={[styles.summaryAmount, { color: "#51cf66" }]}>
-            {formatCurrency(
-              currentMonthSummary.income,
-              state.defaultCurrency
-            )}
+            {formatCurrency(currentMonthSummary.income, state.defaultCurrency)}
           </Text>
         </View>
         <View style={styles.summaryItem}>
@@ -402,15 +469,11 @@ const MoneyTracker = () => {
             style={[
               styles.summaryAmount,
               {
-                color:
-                  currentMonthSummary.total >= 0 ? "#51cf66" : "#ff6b6b",
+                color: currentMonthSummary.total >= 0 ? "#51cf66" : "#ff6b6b",
               },
             ]}
           >
-            {formatCurrency(
-              currentMonthSummary.total,
-              state.defaultCurrency
-            )}
+            {formatCurrency(currentMonthSummary.total, state.defaultCurrency)}
           </Text>
         </View>
       </View>
@@ -425,23 +488,16 @@ const MoneyTracker = () => {
               loop
               style={styles.animation}
             />
+            <Text style={styles.emptyText}>
+              {searchTerm ||
+              filters.type !== "ALL" ||
+              filters.categories.length > 0
+                ? "No transactions match your filters"
+                : "No transactions this month"}
+            </Text>
           </View>
         ) : (
-          currentMonthTransactions.map((transaction) => (
-            <TransactionRecord
-              key={transaction.id}
-              transaction={{
-                ...transaction,
-                convertedAmount: convertAmount(
-                  parseFloat(transaction.amount),
-                  transaction.currency || "USD",
-                  state.defaultCurrency
-                ),
-              }}
-              onEdit={handleEdit}
-              defaultCurrency={state.defaultCurrency}
-            />
-          ))
+          currentMonthTransactions.map(renderTransaction)
         )}
       </ScrollView>
 
@@ -459,6 +515,7 @@ const MoneyTracker = () => {
         />
       </TouchableOpacity>
 
+      {/* Calculator Modal */}
       <Modal
         visible={showCalculator}
         animationType="slide"
@@ -478,6 +535,14 @@ const MoneyTracker = () => {
           defaultCurrency={state.defaultCurrency}
         />
       </Modal>
+
+      {/* Filter Modal */}
+      <FilterModal
+        visible={filterModalVisible}
+        onClose={() => setFilterModalVisible(false)}
+        onApplyFilters={handleApplyFilters}
+        categories={allCategories}
+      />
     </SafeAreaView>
   );
 };
@@ -502,9 +567,25 @@ const styles = StyleSheet.create({
     width: wp("20%"),
     height: wp("8%"),
   },
-  searchButton: {
+  rightButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: wp("20%"),
+    justifyContent: "flex-end",
+  },
+  iconButton: {
     width: wp("10%"),
     alignItems: "center",
+    position: "relative",
+  },
+  filterBadge: {
+    position: "absolute",
+    top: 0,
+    right: wp("2%"),
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.primary,
   },
   searchContainer: {
     padding: wp("4%"),
@@ -555,6 +636,12 @@ const styles = StyleSheet.create({
     padding: wp("8%"),
     backgroundColor: COLORS.background,
     minHeight: hp("50%"),
+  },
+  emptyText: {
+    fontSize: wp("4%"),
+    color: COLORS.text.secondary,
+    marginTop: hp("2%"),
+    textAlign: "center",
   },
   animation: {
     width: wp(50),

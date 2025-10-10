@@ -1,3 +1,4 @@
+// components/TransactionRecord.jsx
 import React, { useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,79 +11,53 @@ import { format, parseISO, isValid } from 'date-fns';
 import { useGlobalContext } from './globalProvider';
 import { currencies } from '../utils/currencyService';
 
-const TransactionRecord = ({ transaction, onEdit }) => {
-  const { deleteExpense, loadExpensesFromDB, state, convertAmount } = useGlobalContext();
+const TransactionRecord = React.memo(({ transaction, onEdit }) => {
+  const { deleteExpense, loadExpensesFromDB, state } = useGlobalContext();
 
-  // Validate transaction data
-  const validateTransaction = useCallback((transaction) => {
-    if (!transaction) return false;
-    const requiredFields = ['id', 'amount', 'type', 'category', 'currency'];
-    return requiredFields.every(field => transaction.hasOwnProperty(field));
-  }, []);
-
-  // Format date with validation
-  const formatDateTime = useCallback((dateString) => {
+  // Format date - memoized
+  const formattedDate = useMemo(() => {
     try {
-      if (!dateString) return 'No date';
+      if (!transaction?.date) return 'No date';
       
-      let date;
-      if (typeof dateString === 'string') {
-        date = parseISO(dateString);
-      } else if (dateString instanceof Date) {
-        date = dateString;
-      } else {
-        return 'Invalid date';
-      }
+      const date = typeof transaction.date === 'string' 
+        ? parseISO(transaction.date) 
+        : transaction.date;
 
-      if (!isValid(date)) {
-        return 'Invalid date';
-      }
-
-      return format(date, 'MMM dd, yyyy hh:mm a');
+      return isValid(date) ? format(date, 'MMM dd, yyyy hh:mm a') : 'Invalid date';
     } catch (error) {
-      console.error('Date formatting error:', error);
       return 'Invalid date';
     }
-  }, []);
+  }, [transaction?.date]);
 
-  // Simplified amount formatting with currency conversion
+  // Format amount - memoized with specific dependencies
   const formattedAmount = useMemo(() => {
-    try {
-      if (!validateTransaction(transaction)) {
-        return `${currencies[state.defaultCurrency]?.symbol || '$'}0.00`;
-      }
-
-      const amount = Number(transaction.amount);
-      if (isNaN(amount)) {
-        return `${currencies[state.defaultCurrency]?.symbol || '$'}0.00`;
-      }
-
-      // Convert amount if currencies are different
-      const convertedAmount = transaction.currency !== state.defaultCurrency
-        ? convertAmount(amount, transaction.currency, state.defaultCurrency)
-        : amount;
-
-      return `${currencies[state.defaultCurrency]?.symbol || '$'}${convertedAmount.toFixed(2)}`;
-    } catch (error) {
-      console.error('Amount formatting error:', error);
+    if (!transaction?.amount || !transaction?.currency) {
       return `${currencies[state.defaultCurrency]?.symbol || '$'}0.00`;
     }
+
+    const amount = Number(transaction.amount);
+    if (isNaN(amount)) {
+      return `${currencies[state.defaultCurrency]?.symbol || '$'}0.00`;
+    }
+
+    // Convert amount if needed
+    let convertedAmount = amount;
+    if (transaction.currency !== state.defaultCurrency) {
+      const rate = state.exchangeRates?.[`${transaction.currency}_${state.defaultCurrency}`] || 1;
+      convertedAmount = amount * rate;
+    }
+
+    return `${currencies[state.defaultCurrency]?.symbol || '$'}${convertedAmount.toFixed(2)}`;
   }, [
-    transaction,
+    transaction?.amount,
+    transaction?.currency,
     state.defaultCurrency,
-    state.exchangeRates,
-    convertAmount,
-    validateTransaction
+    state.exchangeRates?.[`${transaction?.currency}_${state.defaultCurrency}`]
   ]);
 
   const handleDelete = useCallback(async (e) => {
     e.stopPropagation();
     
-    if (!validateTransaction(transaction)) {
-      Alert.alert("Error", "Invalid transaction data");
-      return;
-    }
-
     Alert.alert(
       "Delete Transaction",
       "Are you sure you want to delete this transaction?",
@@ -95,28 +70,27 @@ const TransactionRecord = ({ transaction, onEdit }) => {
               await deleteExpense(transaction.id);
               await loadExpensesFromDB();
             } catch (error) {
-              console.error('Error deleting transaction:', error);
-              Alert.alert("Error", "Failed to delete transaction. Please try again.");
+              Alert.alert("Error", "Failed to delete transaction.");
             }
           },
           style: "destructive"
         }
       ]
     );
-  }, [transaction, deleteExpense, loadExpensesFromDB, validateTransaction]);
+  }, [transaction?.id, deleteExpense, loadExpensesFromDB]);
 
-  if (!validateTransaction(transaction)) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.errorText}>Invalid transaction data</Text>
-      </View>
-    );
+  const handleEdit = useCallback(() => {
+    if (onEdit) onEdit(transaction);
+  }, [onEdit, transaction]);
+
+  if (!transaction?.id) {
+    return null;
   }
 
   return (
     <TouchableOpacity
       style={styles.container}
-      onPress={() => onEdit && onEdit(transaction)}
+      onPress={handleEdit}
       activeOpacity={0.7}
     >
       <View style={styles.mainContent}>
@@ -145,9 +119,7 @@ const TransactionRecord = ({ transaction, onEdit }) => {
             {transaction.account || 'No account'}
           </Text>
           <Text style={styles.dot}>•</Text>
-          <Text style={styles.date}>
-            {formatDateTime(transaction.date)}
-          </Text>
+          <Text style={styles.date}>{formattedDate}</Text>
         </View>
         
         <TouchableOpacity
@@ -164,7 +136,16 @@ const TransactionRecord = ({ transaction, onEdit }) => {
       </View>
     </TouchableOpacity>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison for memo
+  return (
+    prevProps.transaction?.id === nextProps.transaction?.id &&
+    prevProps.transaction?.amount === nextProps.transaction?.amount &&
+    prevProps.transaction?.category === nextProps.transaction?.category &&
+    prevProps.transaction?.date === nextProps.transaction?.date &&
+    prevProps.transaction?.note === nextProps.transaction?.note
+  );
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -224,12 +205,6 @@ const styles = StyleSheet.create({
     opacity: 0.6,
     padding: wp('1%'),
   },
-  errorText: {
-    color: '#ff6b6b',
-    fontSize: wp('3.5%'),
-    textAlign: 'center',
-    padding: wp('2%'),
-  }
 });
 
-export default React.memo(TransactionRecord);
+export default TransactionRecord;
