@@ -2,7 +2,7 @@
 # FINFIT 💰
 
 **FINFIT** is a React Native–based financial management app designed to help users take control of their expenses, budgets, and savings — all in one place.  
-Built for **Droidrush Avishkar MNNIT 2024**, FINFIT empowers users to make smarter financial decisions with insightful analytics, smart budgeting, and real-time notifications.
+Built for **Droidrush Avishkar MNNIT 2025**, FINFIT empowers users to make smarter financial decisions with insightful analytics, smart budgeting, and real-time notifications.
 
 ---
 
