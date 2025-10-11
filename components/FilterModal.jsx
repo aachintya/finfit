@@ -121,7 +121,7 @@ export const FilterModal = ({ visible, onClose, onApplyFilters, categories }) =>
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 1)',
     justifyContent: 'flex-end',
   },
   modalContent: {

@@ -14,7 +14,6 @@ import {
   Alert,
   TextInput,
   ScrollView,
-  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../constants/theme";
@@ -27,7 +26,7 @@ import {
 import ExpenseCalculator from "./ExpenseCalculator";
 import TransactionRecord from "./TransactionRecord";
 import { FilterModal } from "./FilterModal";
-import { useNavigation } from "@react-navigation/native";
+import CommonHeader from "./commonheader";
 import { useGlobalContext } from "./globalProvider";
 import {
   format,
@@ -41,7 +40,6 @@ import { useTranslation } from "react-i18next";
 const MoneyTracker = () => {
   const { onSave, state, dispatch, convertAmount, loadExpensesFromDB } =
     useGlobalContext();
-  const navigation = useNavigation();
   const [showCalculator, setShowCalculator] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null);
   const { t, i18n } = useTranslation();
@@ -157,6 +155,13 @@ const MoneyTracker = () => {
   const handleApplyFilters = useCallback((newFilters) => {
     setFilters(newFilters);
   }, []);
+
+  const handleSearchPress = () => {
+    setShowSearchBar(!showSearchBar);
+    if (showSearchBar) {
+      setSearchTerm("");
+    }
+  };
 
   const showImageSourceOptions = () => {
     Alert.alert(
@@ -341,75 +346,15 @@ const MoneyTracker = () => {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar
-        translucent={false}
-        backgroundColor={COLORS.background}
-        barStyle="light-content"
+    <View style={styles.container}>
+      {/* Common Header */}
+      <CommonHeader
+        searchIconShown={true}
+        onSearchPress={handleSearchPress}
+        filterIconShown={true}
+        onFilterPress={() => setFilterModalVisible(true)}
+        showFilterBadge={filters.type !== "ALL" || filters.categories.length > 0}
       />
-      {/* Header */}
-      <View style={styles.header}>
-        {/* Left side: Menu button */}
-        <TouchableOpacity
-          style={styles.menuButton}
-          onPress={() => navigation.openDrawer()}
-        >
-          <Ionicons name="menu" size={wp("6%")} color={COLORS.text.primary} />
-        </TouchableOpacity>
-
-        {/* Center: Logo */}
-        <View style={styles.logoContainer}>
-          <Image
-            source={require("../assets/images/logo.png")}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-        </View>
-
-        {/* Right side: Search and Filter icons */}
-        <View style={styles.rightButtons}>
-          {showSearchBar ? (
-            <TouchableOpacity
-              onPress={() => {
-                setShowSearchBar(false);
-                setSearchTerm("");
-              }}
-              style={styles.iconButton}
-            >
-              <Ionicons
-                name="close"
-                size={wp("6%")}
-                color={COLORS.text.primary}
-              />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              onPress={() => setShowSearchBar(true)}
-              style={styles.iconButton}
-            >
-              <Ionicons
-                name="search"
-                size={wp("6%")}
-                color={COLORS.text.primary}
-              />
-            </TouchableOpacity>
-          )}
-
-          <TouchableOpacity
-            onPress={() => setFilterModalVisible(true)}
-            style={styles.iconButton}
-          >
-            <Ionicons
-              name="funnel-outline"
-              size={wp("6%")}
-              color={COLORS.text.primary}
-            />
-            {(filters.type !== "ALL" || filters.categories.length > 0) && (
-              <View style={styles.filterBadge} />
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
 
       {/* Search Input */}
       {showSearchBar && (
@@ -543,50 +488,12 @@ const MoneyTracker = () => {
         onApplyFilters={handleApplyFilters}
         categories={allCategories}
       />
-    </SafeAreaView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: wp("4%"),
-    backgroundColor: COLORS.background,
-  },
-  menuButton: {
-    width: wp("10%"),
-    alignItems: "center",
-  },
-  logoContainer: {
-    flex: 1,
-    alignItems: "center",
-  },
-  logo: {
-    width: wp("20%"),
-    height: wp("8%"),
-  },
-  rightButtons: {
-    flexDirection: "row",
-    alignItems: "center",
-    width: wp("20%"),
-    justifyContent: "flex-end",
-  },
-  iconButton: {
-    width: wp("10%"),
-    alignItems: "center",
-    position: "relative",
-  },
-  filterBadge: {
-    position: "absolute",
-    top: 0,
-    right: wp("2%"),
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.primary,
-  },
   searchContainer: {
     padding: wp("4%"),
     backgroundColor: COLORS.lightbackground,
